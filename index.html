@@ -1,0 +1,362 @@
+
+<!DOCTYPE html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><link rel="icon" href="data:">
+    <title>ES-Jam 〜Webプログラミング道場〜</title>
+    <style>
+    #title {
+        font-size: 1.5em;
+        white-space: nowrap;
+        display: inline-block;
+        vertical-align: top;
+        margin: 0 0 .3em 0;
+    }
+    #menu {
+        margin-bottom: 0.3em;
+    }
+    @media only screen and (max-width: 1050px) {
+        #subtitle {
+            display: none;
+        }
+    }
+    @media only screen and (max-width: 700px) {
+        body {
+            margin: 0 !important;
+        }
+        #elmEditor {
+            width: 100% !important;
+        }
+        #elmPreviewContainer {
+            display: none;
+            width: 100% !important;
+        }
+        #btnedit {
+            display: inline !important;
+        }
+        #main {
+            height: calc(100vh - 14em) !important;
+        }
+        #menu > button {
+            font-size: 0.7em !important;
+        }
+    }
+    </style>
+</head>
+
+<body style="height:100vh;font-family:sans-serif;overflow:hidden;">
+    <div style="height:3em;">
+        <h1 id="title">
+            ES-Jam <span id=subtitle style="font-size:66%;">〜Webプログラミング道場〜</span>
+            <select style="margin-left:.5em;padding:.2em;" id="seltemplate"></select>
+        </h1>
+        <div style="float:right;" id=menu>
+            <button id=btnedit style="display: none">編集</button>
+            <button id=btnrun style="font-size:1.2em;">見てみる</button>
+            <button id=btnsave style="font-size:1.2em;">SAVEする<a id="elmSave"></a></button>
+            <button id=btnload style="font-size:1.2em;">LOADする<input id="elmLoad" type="file" hidden></button>
+            <button id=btnup style="font-size:1.2em;">UPする</button>
+            <!--
+                <button id=btnshare title="シェアする" style="font-size:1.2em;">📤</button>
+            -->
+        </div>
+    </div>
+    <div style="height:calc(100vh - 8em);" id="main">
+        <div style="float:left; width:50%; height:100%;" id="elmEditor"></div>
+        <div style="float:right; width:50%; height:100%;" id="elmPreviewContainer">
+            <iframe id="elmPreview" style="width:100%; height:100%;" src="data:text/html;charset=utf-8;base64,5bem5YG0KOOCqOODh+OCo+OCvynjgatIVE1M44KS5pu444GE44Gm44CM6KaL44Gm44G/44KL44CN44Oc44K/44Oz44KS44CC"></iframe>
+        </div>
+    </div>
+    <div style="">
+        <span id=qrcontainer style="display: inline-block; margin-top: 5px;"></span>
+        <span id=publishurl style="display: inline-block; padding-top: 15px; vertical-align: top;"></span>
+        <div style="float:right;padding-top:15px;">
+            <input id=g_pass type="password" placeholder="上書き用パスコード" style="display: inline-block; margin-right: 1em">
+            v20250127 by <a href="https://github.com/code4fukui/htmlprac" target="_blank">Code for FUKUI</a>
+        </div>
+    </div>
+
+    <script type="module">
+        import { monaco } from "https://code4fukui.github.io/monaco-editor/monaco.js";
+        //import { fixMyHTML } from "https://code4fukui.github.io/fixMyHTML/fixMyHTML.js";
+        import { ZenkakuAlpha } from "https://code4fukui.github.io/mojikiban/ZenkakuAlpha.js";
+        import { QRCode } from "https://js.sabae.cc/QRCode.js";
+        import { fetchJSON } from "https://js.sabae.cc/fetchJSON.js";
+        
+        const baseurl = "https://ss.sabae.cc/";
+        //const baseurl = "http://localhost:8010/";
+
+        const fetchText = async (url, req) => {
+            const opt = req ? {
+                method: "POST",
+                mode: "cors",
+                //mode: "no-cors",
+                cache: "no-cache",
+                headers: { "Content-Type": "application/json" },
+                //headers: { "Content-Type": "text/plain" },
+                body: JSON.stringify(req),
+                //body: encodeURIComponent(req),
+            } : null;
+            const res = await (await fetch(url, opt)).text();
+            return res;
+        };
+        let bkidx = null;
+        const showUpURL = (upurl, no) => {
+            qrcontainer.innerHTML = "";
+            if (upurl) {
+                qrcontainer.appendChild(new QRCode(upurl, 2));
+                location.hash = "#" + no;
+                //publishurl.innerHTML = `公開されたURL<br><a href=${upurl}>${upurl}</a>`;
+                publishurl.innerHTML = `<a href=${upurl}>${upurl}</a>`;
+            } else {
+                location.hash = "#";
+                publishurl.innerHTML = "";
+            }
+            bkidx = no;
+        };
+        const extractHTML = (s) => {
+            const n = s.indexOf("```html\n");
+            if (n < 0) return s;
+            const m = s.indexOf("\n```\n", n + 8);
+            if (m < 0) return s;
+            const s2 = s.substring(n + 8, m);
+            return s2;
+        };
+
+
+        const fetchWebApp = async (title) => {
+            const prompt = "Use HTML Create "+title;
+            const messages = [{ role: "user", content: prompt }];
+            const res = await fetchJSON("https://aichat.sabae.cc/api/conversation", messages);
+            const html = "<!-- " + prompt + " by OpenAI API -->\n" + extractHTML(res);
+            if (html == res) return "ごめんなさい!つくれませんでした!ちょっと変えてリトライしてみてください";
+            return html;
+        };
+
+        let g_editor;
+
+        async function エディタを作る() {
+            g_editor = monaco.editor.create(elmEditor, {
+                language: "html",
+                //autoIndent: true,
+                autoIndent: "none",
+                //formatOnPaste: true,
+                //formatOnType: true,
+                tabSize: 2,
+                minimap: { enabled: false },
+                //overflow: "auto",
+                automaticLayout: true,
+                theme: "vs-dark",
+            });
+
+            let prg = "";
+            const url = (new URL(document.location.href)).searchParams.get("url");
+            if (url) {
+                prg += await (await fetch(url)).text();
+                prg += "\n";
+            }
+            //const n = (new URL(document.location.href)).searchParams.get("n");
+            const n = parseInt(document.location.hash.substring(1));
+            if (!isNaN(n)) {
+                if (n) {
+                    const url = baseurl + n + ".html";
+                    prg += await (await fetch(url)).text();
+                    prg += "\n";
+                    showUpURL(url, n);
+                } else {
+                    prg = "\n";
+                }
+            }
+            //prg += decodeURIComponent(location.hash.substr(1)).replaceAll('scr.ES-Jam.ipt','script');
+            if (!prg) {
+                const p1 = localStorage.getItem("program");
+                if (p1) {
+                    prg = p1;
+                }
+            }
+            g_editor.setValue(prg);
+
+            elmEditor.addEventListener("keyup", (e) => {
+                if (e.ctrlKey && e.key == "s") {
+                    見てみる();
+                    // elmPreview.focus();
+                }
+            });
+            if (prg) {
+                見てみる();
+            }
+        }
+
+        function 見てみる() {
+            const p1 = g_editor.getValue();
+            //const p2 = fixMyHTML(p1); // ヒアドキュメントなどコードの一部がおかしくなる
+            const p2 = ZenkakuAlpha.toHan(p1);
+            if (p1 != p2) {
+                g_editor.setValue(p2);
+                //alert("全角文字を半角文字に置き換えました");
+            }
+            const p3 = extractHTML(p2);
+            if (p3 != p2) {
+                g_editor.setValue(p3);
+            }
+            localStorage.setItem("program", g_editor.getValue());
+            //g_editor.getAction("editor.action.formatDocument").run();
+            elmPreview.src = URL.createObjectURL(new Blob([g_editor.getValue()], { type: "text/html" }));
+        }
+
+        function SAVEする() {
+            elmSave.download = `WebDOJO.${Date.now()}.html`;
+            elmSave.href = URL.createObjectURL(new Blob([g_editor.getValue()], { type: "application/octet-stream" }));
+            elmSave.click();
+        }
+
+        function LOADする() {
+            const f = new FileReader();
+            f.onload = () => {
+                g_editor.setValue(f.result);
+            };
+            f.readAsText(elmLoad.files[0]);
+        }
+
+        function シェアする() {
+            const code = encodeURIComponent(g_editor.getValue().replaceAll('script','scr.ES-Jam.ipt')).replaceAll('(','%28').replaceAll(')','%29').replaceAll("'",'%27');
+            navigator.clipboard.writeText(`${location.origin}${location.pathname}#${code}`);
+            alert('シェア用URLをクリップボードにコピーしました');
+        }
+        async function UPする() {
+alert("DONT UP!");
+        }
+        // init
+        btnrun.onclick = () => {
+            console.log(getComputedStyle(btnedit).display);
+            if (getComputedStyle(btnedit).display == "inline-block") {
+                elmPreviewContainer.style.display = "block";
+                elmEditor.style.display = "none";
+            }
+            見てみる();
+        };
+        btnedit.onclick = () => {
+            console.log(getComputedStyle(btnedit).display);
+            if (getComputedStyle(btnedit).display == "inline-block") {
+                elmPreviewContainer.style.display = "none";
+                elmEditor.style.display = "block";
+            }
+        };
+        elmLoad.onchange = () => LOADする();
+        btnload.onclick = () => elmLoad.click();
+        btnsave.onclick = () => SAVEする();
+        btnup.onclick = () => UPする();
+        //btnshare.onclick = () => シェアする();
+        エディタを作る();
+
+        // サポート
+        const script = "script";
+        const templates = {
+            "ウェブアプリ開発サポート": "",
+            "新規作成": "\n",
+            "タイトル h1": "<h1>タイトル</h1>\n",
+            "テキスト": "テキスト\n",
+            "改行 br": "<br>\n",
+            "色付きテキスト font": "<font color=red>あかいもじ</font>\n",
+            "区切り線 hr": "<hr>\n",
+            "リンク a": "<a href=https://jig.jp/>jig.jp</a>\n",
+            "背景色 bgcolor": "<body bgcolor=green>\n",
+            "リンクの色 css": "<style>a { color: gray !important }</style>\n",
+            "DNCL3": `<${script} type="module" src="https://code4fukui.github.io/DNCL3/web.js"></${script}>
+<${script} type="text/dncl">
+print "こんにちは!"
+
+# DNCL3言語仕様はこちら https://github.com/code4fukui/DNCL3/blob/main/README_ja.md
+</${script}>`,
+            "DNCL3 ノベルゲーム テンプレ": `<${script} type="module" src="https://code4fukui.github.io/DNCL3/web.js"></${script}>
+<${script} type="text/dncl">
+function bg, show from "https://js.sabae.cc/egadv.js"
+
+bg()
+show("ここはどこだろう?")
+show("福井かな?")
+</${script}>`,
+            "Wirth(ヴィルト)": `<${script} type="module" src="https://code4fukui.github.io/Wirth/web.js"></${script}>
+<${script} type="text/wirth">
+print "こんにちは!"
+
+# Wirth言語仕様はこちら https://github.com/code4fukui/Wirth/blob/main/README_ja.md
+</${script}>`,
+            "Wirth ノベルゲーム テンプレ": `<${script} type="module" src="https://code4fukui.github.io/Wirth/web.js"></${script}>
+<${script} type="text/wirth">
+function bg, show from "https://js.sabae.cc/egadv.js"
+
+bg()
+show("ここはどこだろう...")
+show("いきたい?")
+</${script}>`,
+            "JavaScript": "<" + "script>\nalert(1 + 1);\n</" + "script>\n",
+            "ノベルゲーム テンプレ egadv": `<${script} type="module">
+import { bg, show } from "https://js.sabae.cc/egadv.js";
+await bg();
+await show("ここはどこだろう?");
+await show("福井かな?");
+</${script}>`,
+            "地図表示 テンプレ egadv": `<${script} type="module">
+import { bg, show } from "https://js.sabae.cc/egadv.js";
+await bg("E913");
+await show("地図の表示");
+await show("移動、拡大縮小できます");
+await show("左下の Geo3x3 をクリック、値をコピーして、bg関数のパラメータに設定するとその場所が表示されます");
+</${script}>`,
+            //"ランダム福井県写真 for egadv": "await bg("福井県");\n",
+            "VRアプリ テンプレ egvr": `<${script} type="module">
+import * as eg from "https://js.sabae.cc/egvr.js";
+
+// x, y, z, size, color
+eg.sphere(0, 1, -2, 0.5, "red")
+eg.box(1, 1, -2, 0.5, "blue")
+eg.box(-1, 1, -2, 0.5, "yellow")
+</${script}>`,
+            "スマホ対応 viewport": `<meta name="viewport" content="width=device-width">`,
+            "AIにおねがい": "AIにおねがい",
+        };
+        for (const name in templates) {
+            const op = document.createElement("option");
+            op.textContent = name;
+            op.value = templates[name];
+            seltemplate.appendChild(op);
+        }
+        g_editor.insertText = (text) => {
+            const selection = g_editor.getSelection();
+            const id = { major: 1, minor: 1 };             
+            const op = {identifier: id, range: selection, text, forceMoveMarkers: true};
+            g_editor.executeEdits("my-source", [op]);
+        };
+        seltemplate.oninput = async (event) => {
+            const text = seltemplate.value;
+            if (text.startsWith("<meta ")) {
+                g_editor.setValue(text + "\n" + g_editor.getValue());
+            } else if (text == "\n") {
+                if (confirm("今のプログラムを消して最初からつくりますか?")) {
+                    g_editor.setValue("");
+                    showUpURL();
+                }
+            } if (text.startsWith("<script")) {
+                if (confirm("今のプログラムを消してつくりますか?")) {
+                    g_editor.setValue(text);
+                }
+            } else if (text == "AIにおねがい") {
+                const title = prompt("AIにどんなアプリをつくってもらう?");
+                if (title) {
+                    g_editor.setValue("AIに「" + title + "」の作成をおねがい中・・・");
+                    const res = await fetchWebApp(title);
+                    console.log(res);
+                    g_editor.setValue(res);
+                }
+            } else {
+                g_editor.insertText(text);
+            }
+            seltemplate.value = "";
+        };
+
+        g_pass.value = localStorage.getItem("esjam_password") || "";
+        g_pass.onchange = () => {
+            localStorage.setItem("esjam_password", g_pass.value);
+        };
+    </script>
+</body>
+
+</html>
